@@ -1,5 +1,5 @@
 // -----------------------------------------------------------
-// MEGGY JR: LUNAR LANDER LANDSCAPE SCROLL (V14 - Final Code)
+// MEGGY JR: LUNAR LANDER LANDSCAPE SCROLL (FINAL VERSION)
 // -----------------------------------------------------------
 
 // 1. INCLUDE THE MEGGY SIMPLE LIBRARY 
@@ -12,15 +12,13 @@
 #define COLOR_THRUST   2    
 #define COLOR_SKY      0    
 
-#define MAX_HEIGHT     7    
+#define MAX_HEIGHT     6    // Max height is 6 pixels high
 #define SCREEN_WIDTH   8    
 #define SCREEN_HEIGHT  8    
 #define SCROLL_DELAY  50    
 
-// Horizontal Physics Constants
-#define MAX_SCROLL_VELOCITY  1.5  
-#define SCROLL_ACCEL         0.15 
-#define SCROLL_INERTIA_DECAY 0.05 
+// Horizontal Physics Constants (Simplified)
+#define SCROLL_TOGGLE_SPEED 0.3 // Fixed speed for scroll toggle
 
 // Vertical Physics Constants
 #define MAX_VELOCITY       1.0  
@@ -28,10 +26,10 @@
 #define THRUST_ACCEL       0.05 // Pushes UP (Y increases towards 7)
 
 // Safe Landing & Tone Constants
-#define SAFE_LANDING_SPEED 0.3  // Descent rate threshold (must be > -0.3)
-#define HAPPY_TONE_FREQ    1000 // High-pitched tone frequency
-#define HAPPY_TONE_DUR     300  // Duration of the happy tone in milliseconds
-#define CRASH_TONE_FREQ    100  // Low-pitched tone for rough landing
+#define SAFE_LANDING_SPEED 0.3  // Descent rate threshold
+#define HAPPY_TONE_FREQ    1000 
+#define HAPPY_TONE_DUR     300  
+#define CRASH_TONE_FREQ    100  
 #define CRASH_TONE_DUR     100  
 
 // 3. GLOBAL VARIABLES
@@ -45,9 +43,9 @@ const int dotX = 3;
 float dotY;                         
 float dotVelocityY;                 
 
-bool flickerState = false;       // Toggles between true/false for flicker effect
-bool isMuted = false;            // NEW: Tracks if sound is muted
-bool landedTonePlayed = false;   // NEW: Tracks if the tone has played for the current landing
+bool flickerState = false;       
+bool isMuted = false;            
+bool landedTonePlayed = false;   
 
 // -----------------------------------------------------------
 // HELPER FUNCTION: GENERATE NEW LANDSCAPE DATA
@@ -61,6 +59,7 @@ void generateLandscape() {
     int heightChange = random(-2, 3); 
     int newHeight = lastHeight + heightChange;
 
+    // CLAMPING: Check against MAX_HEIGHT
     if (newHeight > MAX_HEIGHT) {
       newHeight = MAX_HEIGHT;
     } else if (newHeight < 1) {
@@ -85,7 +84,6 @@ void setup() {
   dotY = SCREEN_HEIGHT * 0.75; 
   dotVelocityY = 0.0; 
 
-  // Initialize new state variables
   isMuted = false;
   landedTonePlayed = false;
 }
@@ -97,11 +95,11 @@ void loop() {
   
   CheckButtonsDown(); 
   
-  // --- A. MUTE TOGGLE ---
+  // --- MUTE TOGGLE ---
   if (Button_B) {
-    isMuted = !isMuted; // Toggle the mute state
+    isMuted = !isMuted; 
+    // Play confirmation sound only if unmuted
     if (!isMuted) {
-      // Confirmation beep for Unmute
       Tone_Start(800, 50); 
     }
   }
@@ -112,7 +110,7 @@ void loop() {
   
   bool isAirborne = (dotY > (float)groundHeight);
 
-  // If the lander is flying, reset the tone flag so it can play on the next landing
+  // If the lander lifts off, reset the tone flag
   if (isAirborne) {
     landedTonePlayed = false;
   }
@@ -121,35 +119,33 @@ void loop() {
   // STEP 1: APPLY FORCES AND ACCELERATION
   // ===================================
   
-  // --- HORIZONTAL SCROLL CONTROL (GATED) ---
+  // --- A. HORIZONTAL SCROLL CONTROL (TOGGLE LOGIC) ---
   if (isAirborne) {
       
-    // 1. ACCELERATION
-    if (Button_Left) {
-      scrollSpeed = scrollSpeed - SCROLL_ACCEL; 
-    }
+    // Right button pressed: 
     if (Button_Right) {
-      scrollSpeed = scrollSpeed + SCROLL_ACCEL; 
+        // 1. BRAKE: If mountains are moving RIGHT (> 0.0), pressing RIGHT stops.
+        if (scrollSpeed > 0.0) { 
+            scrollSpeed = 0.0;
+        } else {
+            // 2. MOVE: Otherwise, set mountains to scroll LEFT (negative speed).
+            scrollSpeed = -SCROLL_TOGGLE_SPEED; 
+        }
     }
     
-    // 2. INERTIA DECAY
-    if (scrollSpeed > 0.0) {
-      scrollSpeed = scrollSpeed - SCROLL_INERTIA_DECAY;
-      if (scrollSpeed < 0.0) scrollSpeed = 0.0; 
-    } else if (scrollSpeed < 0.0) {
-      scrollSpeed = scrollSpeed + SCROLL_INERTIA_DECAY;
-      if (scrollSpeed > 0.0) scrollSpeed = 0.0; 
-    }
-
-    // 3. CLAMP horizontal scroll speed
-    if (scrollSpeed > MAX_SCROLL_VELOCITY) {
-      scrollSpeed = MAX_SCROLL_VELOCITY;
-    } else if (scrollSpeed < -MAX_SCROLL_VELOCITY) {
-      scrollSpeed = -MAX_SCROLL_VELOCITY;
+    // Left button pressed: 
+    if (Button_Left) {
+        // 1. BRAKE: If mountains are moving LEFT (< 0.0), pressing LEFT stops.
+        if (scrollSpeed < 0.0) {
+            scrollSpeed = 0.0;
+        } else {
+            // 2. MOVE: Otherwise, set mountains to scroll RIGHT (positive speed).
+            scrollSpeed = SCROLL_TOGGLE_SPEED;
+        }
     }
     
   } else {
-    // If landed, stop all horizontal movement immediately
+    // If landed, stop all horizontal movement
     scrollSpeed = 0.0;
   }
   
@@ -162,9 +158,9 @@ void loop() {
   if (Button_A) {
     dotVelocityY = dotVelocityY + THRUST_ACCEL;
     
-    // Play sound ONLY if unmuted
+    // Check mute state before playing tone
     if (!isMuted) {
-        Tone_Start(500, SCROLL_DELAY); 
+      Tone_Start(500, SCROLL_DELAY); 
     }
     flickerState = !flickerState;
   } else {
@@ -188,10 +184,10 @@ void loop() {
   // 2. Collision Check 
   if ( dotY < (float)groundHeight ) {
     
-    // If the tone has NOT been played for this landing yet:
+    // Check if the landing tone has NOT been played yet
     if (!landedTonePlayed) {
         
-        // Check for SAFE LANDING
+        // SAFE LANDING check
         if (dotVelocityY < 0.0 && dotVelocityY > -SAFE_LANDING_SPEED) {
             if (!isMuted) {
                 // SUCCESS! Play the happy tone.
@@ -204,7 +200,7 @@ void loop() {
             }
         }
         
-        // Mark the tone as played so it doesn't repeat until lift-off
+        // Mark tone as played
         landedTonePlayed = true;
     }
     
@@ -213,7 +209,7 @@ void loop() {
     dotVelocityY = 0.0; 
   }
 
-  // 3. CLAMPING (Top and Bottom Edges)
+  // 3. CLAMPING (Screen Edges)
   if (dotY <= 0.0) {
     dotY = 0.0; 
     dotVelocityY = 0.0; 
@@ -248,13 +244,14 @@ void loop() {
     int landscapeIndex = ((int)landscapeOffset + screenX) % LANDSCAPE_SIZE;
     int height = mountainHeights[landscapeIndex];
     
+    // Draw from the base (y=0) up to the mountain's height (y=height-1).
     for (int y = 0; y < height; y++) {
       DrawPx(screenX, y, COLOR_MOUNTAIN);
     }
   }
   
   // --- DRAW PLAYER DOT ---
-  // Draw the thruster flicker one pixel below the lander
+  // Draw the thruster flicker
   if (Button_A && (int)dotY > 0) {
       if (flickerState) {
           DrawPx(dotX, (int)dotY - 1, COLOR_THRUST);
