@@ -1,5 +1,5 @@
 // -----------------------------------------------------------
-// MEGGY JR: LUNAR LANDER LANDSCAPE SCROLL (FINAL VERSION)
+// MEGGY JR: LUNAR LANDER LANDSCAPE SCROLL (FINAL CODE)
 // -----------------------------------------------------------
 
 // 1. INCLUDE THE MEGGY SIMPLE LIBRARY 
@@ -17,8 +17,10 @@
 #define SCREEN_HEIGHT  8    
 #define SCROLL_DELAY  50    
 
-// Horizontal Physics Constants (Simplified)
-#define SCROLL_TOGGLE_SPEED 0.3 // Fixed speed for scroll toggle
+// Horizontal Physics Constants
+#define SCROLL_ACCEL_RATE    0.08 // Rate at which scroll speed changes when button is held
+#define SCROLL_INERTIA_DECAY 0.05 // Gradual slowdown to zero
+#define MAX_SCROLL_SPEED     0.5  // Maximum scroll speed limit
 
 // Vertical Physics Constants
 #define MAX_VELOCITY       1.0  
@@ -39,13 +41,16 @@ int mountainHeights[LANDSCAPE_SIZE];
 float landscapeOffset;              
 float scrollSpeed;                  
 
-const int dotX = 3;                 
+const int dotX = 3;                 // Lander's fixed X position
 float dotY;                         
 float dotVelocityY;                 
 
 bool flickerState = false;       
 bool isMuted = false;            
 bool landedTonePlayed = false;   
+
+// Variables for Button State Tracking
+bool lastButtonBState = false; 
 
 // -----------------------------------------------------------
 // HELPER FUNCTION: GENERATE NEW LANDSCAPE DATA
@@ -59,7 +64,6 @@ void generateLandscape() {
     int heightChange = random(-2, 3); 
     int newHeight = lastHeight + heightChange;
 
-    // CLAMPING: Check against MAX_HEIGHT
     if (newHeight > MAX_HEIGHT) {
       newHeight = MAX_HEIGHT;
     } else if (newHeight < 1) {
@@ -86,6 +90,9 @@ void setup() {
 
   isMuted = false;
   landedTonePlayed = false;
+  
+  CheckButtonsDown(); 
+  lastButtonBState = Button_B;
 }
 
 // -----------------------------------------------------------
@@ -93,16 +100,17 @@ void setup() {
 // -----------------------------------------------------------
 void loop() {
   
+  // Read current button held state
   CheckButtonsDown(); 
   
-  // --- MUTE TOGGLE ---
-  if (Button_B) {
+  // --- MUTE TOGGLE (Using internal debouncing for toggle logic) ---
+  if (Button_B && !lastButtonBState) {
     isMuted = !isMuted; 
-    // Play confirmation sound only if unmuted
     if (!isMuted) {
       Tone_Start(800, 50); 
     }
   }
+  lastButtonBState = Button_B; // Update the state of button B
 
   // --- Check for Airborne State ---
   int currentLandscapeIndex = ((int)landscapeOffset + dotX) % LANDSCAPE_SIZE;
@@ -110,7 +118,6 @@ void loop() {
   
   bool isAirborne = (dotY > (float)groundHeight);
 
-  // If the lander lifts off, reset the tone flag
   if (isAirborne) {
     landedTonePlayed = false;
   }
@@ -119,33 +126,39 @@ void loop() {
   // STEP 1: APPLY FORCES AND ACCELERATION
   // ===================================
   
-  // --- A. HORIZONTAL SCROLL CONTROL (TOGGLE LOGIC) ---
+  // --- A. HORIZONTAL SCROLL CONTROL ---
   if (isAirborne) {
       
-    // Right button pressed: 
-    if (Button_Right) {
-        // 1. BRAKE: If mountains are moving RIGHT (> 0.0), pressing RIGHT stops.
-        if (scrollSpeed > 0.0) { 
-            scrollSpeed = 0.0;
-        } else {
-            // 2. MOVE: Otherwise, set mountains to scroll LEFT (negative speed).
-            scrollSpeed = -SCROLL_TOGGLE_SPEED; 
-        }
+    if (Button_Left) {
+        // SCROLL RIGHT: Add positive acceleration (mountains move Right)
+        scrollSpeed = scrollSpeed + SCROLL_ACCEL_RATE;
     }
     
-    // Left button pressed: 
-    if (Button_Left) {
-        // 1. BRAKE: If mountains are moving LEFT (< 0.0), pressing LEFT stops.
-        if (scrollSpeed < 0.0) {
-            scrollSpeed = 0.0;
-        } else {
-            // 2. MOVE: Otherwise, set mountains to scroll RIGHT (positive speed).
-            scrollSpeed = SCROLL_TOGGLE_SPEED;
-        }
+    if (Button_Right) {
+        // SCROLL LEFT: Add negative acceleration (mountains move Left)
+        scrollSpeed = scrollSpeed - SCROLL_ACCEL_RATE;
+    }
+    
+    // Gradual Slowdown (Decay/Inertia)
+    if (!Button_Left && !Button_Right) {
+      if (scrollSpeed > 0.0) {
+        scrollSpeed = scrollSpeed - SCROLL_INERTIA_DECAY;
+        if (scrollSpeed < 0.0) scrollSpeed = 0.0; 
+      } else if (scrollSpeed < 0.0) {
+        scrollSpeed = scrollSpeed + SCROLL_INERTIA_DECAY;
+        if (scrollSpeed > 0.0) scrollSpeed = 0.0; 
+      }
+    }
+    
+    // CLAMP horizontal scroll speed
+    if (scrollSpeed > MAX_SCROLL_SPEED) {
+      scrollSpeed = MAX_SCROLL_SPEED;
+    } else if (scrollSpeed < -MAX_SCROLL_SPEED) {
+      scrollSpeed = -MAX_SCROLL_SPEED;
     }
     
   } else {
-    // If landed, stop all horizontal movement
+    // If landed, stop all horizontal movement immediately
     scrollSpeed = 0.0;
   }
   
@@ -158,10 +171,10 @@ void loop() {
   if (Button_A) {
     dotVelocityY = dotVelocityY + THRUST_ACCEL;
     
-    // Check mute state before playing tone
     if (!isMuted) {
       Tone_Start(500, SCROLL_DELAY); 
     }
+    // Vertical thrust toggles the flicker state for all thrusters
     flickerState = !flickerState;
   } else {
     flickerState = false;
@@ -190,7 +203,6 @@ void loop() {
         // SAFE LANDING check
         if (dotVelocityY < 0.0 && dotVelocityY > -SAFE_LANDING_SPEED) {
             if (!isMuted) {
-                // SUCCESS! Play the happy tone.
                 Tone_Start(HAPPY_TONE_FREQ, HAPPY_TONE_DUR); 
             }
         } else if (dotVelocityY < -SAFE_LANDING_SPEED) {
@@ -244,22 +256,38 @@ void loop() {
     int landscapeIndex = ((int)landscapeOffset + screenX) % LANDSCAPE_SIZE;
     int height = mountainHeights[landscapeIndex];
     
-    // Draw from the base (y=0) up to the mountain's height (y=height-1).
     for (int y = 0; y < height; y++) {
       DrawPx(screenX, y, COLOR_MOUNTAIN);
     }
   }
   
-  // --- DRAW PLAYER DOT ---
-  // Draw the thruster flicker
-  if (Button_A && (int)dotY > 0) {
+  // --- DRAW PLAYER DOT AND THRUSTERS ---
+  
+  int landerY = (int)dotY;
+
+  // Vertical Thruster (Flame BELOW lander)
+  if (Button_A && landerY > 0) {
       if (flickerState) {
-          DrawPx(dotX, (int)dotY - 1, COLOR_THRUST);
+          DrawPx(dotX, landerY - 1, COLOR_THRUST);
       }
   }
   
-  // Draw the lander itself
-  DrawPx(dotX, (int)dotY, COLOR_LANDER);
+  // Horizontal Thruster Flicker (Flames to the sides)
+  if (isAirborne && flickerState) {
+
+      // Flame for SCROLL RIGHT (Caused by Button_Left) -> Flame on LEFT side of lander
+      if (Button_Left && dotX > 0) {
+          DrawPx(dotX - 1, landerY, COLOR_THRUST);
+      }
+      
+      // Flame for SCROLL LEFT (Caused by Button_Right) -> Flame on RIGHT side of lander
+      if (Button_Right && dotX < SCREEN_WIDTH - 1) {
+          DrawPx(dotX + 1, landerY, COLOR_THRUST);
+      }
+  }
+  
+  // Draw the lander itself (Drawn last to be on top of the thruster flames)
+  DrawPx(dotX, landerY, COLOR_LANDER);
   
   // ===================================
   // STEP 5: DISPLAY AND DELAY
